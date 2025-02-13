@@ -1,4 +1,4 @@
-# XMLSyncGo
+# XMLSyncGo 📄🔄🐹
 
 A Go tool for synchronizing job data between a remote XML file (via SFTP) and a local database (JSON files). It efficiently handles additions, updates, and removals of jobs, tracking changes and providing statistics. Ideal for automating data synchronization tasks.
 
@@ -17,7 +17,7 @@ A Go tool for synchronizing job data between a remote XML file (via SFTP) and a 
 * **Configurable:** Uses a JSON configuration file for SFTP credentials, file paths, and other settings.
 * **Scheduled Runs (Optional):** Can be run periodically to automate synchronization.
 * **Cross-Platform:** Compiles to a single binary for easy cross-platform deployment.
-
+* **Web App:** Access a local web app dashboard. Built with Vue.js and Bootstarp 5.
 
 ## Getting Started
 
