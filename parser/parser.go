@@ -85,9 +85,9 @@ func (pm ParserManager) sftpStep() error {
 		}
 
 		// Log some audit trail
-		models.NewAuditLog("✔  Successfully connected to SFTP. Remote file is newer than local data. Downloaded successfully.")
+		models.NewAuditLog("✔  Successfully connected to SFTP. Remote file is newer than local data. Downloaded successfully.", pm.file.AuditIteration)
 	} else {
-		models.NewAuditLog("✔  Successfully connected to SFTP. Local data on track with remote data.")
+		models.NewAuditLog("✔  Successfully connected to SFTP. Local data on track with remote data.", pm.file.AuditIteration)
 	}
 	return nil
 }
@@ -155,9 +155,8 @@ func (pm *ParserManager) parseXML() error {
 		}
 	}
 	// Log some audit trail
-	models.NewAuditLog("✔  Successfully parsed new XML file.")
-	models.NewAuditLog(fmt.Sprintf("%d jobs parsed", len(pm.jobs)))
-	models.NewAuditLog(fmt.Sprintf("%+v", pm.keysFrequency))
+	models.NewAuditLog("✔  Successfully parsed new XML file.", pm.file.AuditIteration)
+	models.NewAuditLog(fmt.Sprintf("%+v", pm.keysFrequency), pm.file.AuditIteration)
 	return nil
 }
 
@@ -267,17 +266,6 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 
 	// Batch save all edits to db
 	result := initializers.DB.Create(&edits)
-	if result.Error != nil {
-		return result.Error
-	}
-	// Convert stat map to json string
-	statJson, err := json.Marshal(pm.stats)
-	if err != nil {
-		return err
-	}
-	// Save stats to db
-	var stat models.Stat = models.Stat{JsonStr: string(statJson)}
-	result = initializers.DB.Save(&stat)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -399,49 +387,54 @@ func (pm ParserManager) processJobs() error {
 			pm.stats["jobs_removed"]++
 		}
 	}
+	// Convert stat map to json string
+	statJson, err := json.Marshal(pm.stats)
+	if err != nil {
+		return err
+	}
+	// Save stats to db
+	stat := models.Stat{JsonStr: string(statJson)}
+	result = initializers.DB.Save(&stat)
+	if result.Error != nil {
+		return result.Error
+	}
 	// Log some audit trail
-	models.NewAuditLog(fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)))
+	models.NewAuditLog(fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)), pm.file.AuditIteration)
 	return nil
 }
 
 func (pm ParserManager) Run(clients *[]models.Client) {
 	for _, client := range *clients {
+		var err error
 		for _, file := range client.Files {
 			pm := ParserManager{file: &file}
 			// SFTP Step
-			err := pm.sftpStep()
-			if err != nil {
-				fmt.Printf("err: %v\n", err)
-				models.NewAuditLog(err.Error())
+			if err = pm.sftpStep(); err != nil {
+				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
 				continue
 			}
 			// Remote file parse step
-			err = pm.parseXML()
-			if err != nil {
-				fmt.Printf("err: %v\n", err)
-				models.NewAuditLog(err.Error())
+			if err = pm.parseXML(); err != nil {
+				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
 				continue
 			}
 			// After parsing the file, and before saving
 			// anything to the db, check file data integrity
-			err = pm.fileIntegrityCheck()
-			if err != nil {
-				fmt.Printf("err: %v\n", err)
-				models.NewAuditLog(err.Error())
+			if err = pm.fileIntegrityCheck(); err != nil {
+				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
 				continue
 			}
 			// Process new jobs
-			err = pm.processJobs()
-			if err != nil {
-				fmt.Printf("err: %v\n", err)
-				models.NewAuditLog(err.Error())
+			if err = pm.processJobs(); err != nil {
+				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
 				continue
 			}
 			// Increment AuditIteration and save
 			file.AuditIteration++
 			result := initializers.DB.Save(&pm.file)
 			if result.Error != nil {
-				models.NewAuditLog(result.Error.Error())
+				models.NewAuditLog(result.Error.Error(), pm.file.AuditIteration)
+				continue
 			}
 		}
 	}
