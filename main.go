@@ -20,4 +20,17 @@ func main() {
 	pm := parser.ParserManager{}
 	pm.Run(&clients)
 
+	// Web Server
+	// r := gin.Default()
+
+	// // Clients
+	// r.GET("/clients", controllers.ClientGetAll)
+	// r.POST("/clients", controllers.ClientCreate)
+
+	// // Files
+	// r.GET("/clients/:client_id/files", controllers.FileGet)
+	// r.POST("/clients/:client_id/files", controllers.FileCreate)
+
+	// // Serve on env.PORT
+	// r.Run()
 }
