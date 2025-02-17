@@ -1,3 +1,6 @@
 data/
 *.xml
 src/web/fe/node_modules
+.env
+temp/
+*.sqlite3
