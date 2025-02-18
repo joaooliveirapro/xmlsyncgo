@@ -11,5 +11,5 @@ type Edit struct {
 	Value           string // For added keys
 	NewValue        string // For existing keys
 	OldValue        string // For existing keys
-	JobID           uint
+	JobID           uint   `gorm:"not null;index"` // Edit N:1 Job
 }

@@ -18,7 +18,9 @@ type File struct {
 	Port                 string
 	Username             string
 	Password             string
-	ClientID             uint // File -*--1- Client
 	AuditIteration       uint
-	Audit                []AuditLog
+	ClientID             uint       `gorm:"not null;index"`    // File N:1 Client
+	Audit                []AuditLog `gorm:"foreignKey:FileID"` // File 1:N AuditLog
+	Stats                []Stat     `gorm:"foreignKey:FileID"` // File 1:N Stat
+	Jobs                 []Job      `gorm:"foreignKey:FileID"` // File 1:N Job
 }

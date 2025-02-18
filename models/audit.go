@@ -8,7 +8,7 @@ import (
 type AuditLog struct {
 	gorm.Model
 	Text           string
-	FileID         uint
+	FileID         uint `gorm:"not null;index"` // AuditLog N:1 File
 	AuditIteration uint
 }
 
