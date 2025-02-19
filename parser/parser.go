@@ -4,11 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beevik/etree"
@@ -20,11 +20,21 @@ import (
 )
 
 type ParserManager struct {
+	tx            *gorm.DB
 	file          *models.File
 	jobs          []map[string]interface{}
 	keysFrequency map[string]int
-	stats         map[string]int
+	stats         *models.Stat
 }
+
+const (
+	ADDED_KEYS   = "ADDED_KEYS"
+	EDITED_KEYS  = "EDITED_KEYS"
+	REMOVED_KEYS = "REMOVED_KEYS"
+	JOBS_ADDED   = "JOBS_ADDED"
+	JOBS_REMOVED = "JOBS_REMOVED"
+	JOBS_EDITED  = "JOBS_EDITED"
+)
 
 // Log into the SFTP, check if the data is newer and download it
 // to the temp folder for further processing.
@@ -39,123 +49,123 @@ func (pm ParserManager) sftpStep() error {
 	addr := fmt.Sprintf("%s:%s", pm.file.Hostname, pm.file.Port)
 	conn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("❌ Failed to connect to SFTP: %v", err)
+		return fmt.Errorf("[processJobs] ftpStep] Failed to connect to SFTP: %w", err)
 	}
 	defer conn.Close()
 
 	client, err := sftp.NewClient(conn)
 	if err != nil {
-		return fmt.Errorf("❌ Failed to create SFTP client: %v", err)
+		return fmt.Errorf("[sftpStep] Failed to create SFTP client: %w", err)
 	}
 	defer client.Close()
 
 	// 2. Check remote modification time
 	remoteModTime, err := client.Stat(pm.file.RemoteFilepath)
 	if err != nil {
-		return fmt.Errorf("❌ Error getting remote file mod time: %v", err)
+		return fmt.Errorf("[sftpStep] Error getting remote file mod time: %w", err)
 	}
 	if remoteModTime.ModTime().After(pm.file.RemoteModTime) { // Use After for time comparison
 		// 3. Read the updated remote file
 		fullFilePath := fmt.Sprintf("%s%s", pm.file.RemoteFilepath, pm.file.RemoteFilename)
 		remoteFile, err := client.Open(fullFilePath)
 		if err != nil {
-			return fmt.Errorf("❌ Error opening remote file: %v", err)
+			return fmt.Errorf("[sftpStep] Error opening remote file: %w", err)
 		}
 		defer remoteFile.Close()
-
 		// 4. Create a local temporary file
 		fullTempFilePath := fmt.Sprintf("./temp/%s", pm.file.RemoteFilename)
 		localFile, err := os.Create(fullTempFilePath) // Create local file
 		if err != nil {
-			return fmt.Errorf("❌ Error creating local file '%s': %v", pm.file.RemoteFilename, err)
+			return fmt.Errorf("[sftpStep] Error creating local file '%s': %w", pm.file.RemoteFilename, err)
 		}
 		defer localFile.Close()
-
 		// 5. Copy the file
 		_, err = io.Copy(localFile, remoteFile)
 		if err != nil {
-			return fmt.Errorf("❌ Error downloading file: %v", err)
+			return fmt.Errorf("[sftpStep] Error downloading file: %w", err)
 		}
-
 		// Set the remote_mod_time to the newest mod time
 		pm.file.RemoteModTime = remoteModTime.ModTime()
-		result := initializers.DB.Save(&pm.file)
+		result := pm.tx.Save(&pm.file)
 		if result.Error != nil {
-			return fmt.Errorf("❌ Error updating file.remote_mod_time: %v", err)
+			return fmt.Errorf("[sftpStep] Error updating file.remote_mod_time: %w", err)
 		}
-
-		// Log some audit trail
-		models.NewAuditLog("✔  Successfully connected to SFTP. Remote file is newer than local data. Downloaded successfully.", pm.file.AuditIteration)
-	} else {
-		models.NewAuditLog("✔  Successfully connected to SFTP. Local data on track with remote data.", pm.file.AuditIteration)
 	}
 	return nil
 }
 
-// Recursive function to iterate over all descendants and build path
-func iterateDescendants(element *etree.Element, currentPath []string, callback func(*etree.Element, []string)) {
-	newPath := make([]string, len(currentPath))
-	copy(newPath, currentPath) // Important: Create a copy!
+func iterateDescendants(element *etree.Element, currentPath []string, callback func(*etree.Element, string)) {
+	newPath := make([]string, len(currentPath), len(currentPath)+10)
+	copy(newPath, currentPath)
 	newPath = append(newPath, element.Tag)
-	callback(element, newPath) // Call the callback
+	pathStr := strings.Join(newPath, ".")
+	callback(element, pathStr)
 	for _, child := range element.ChildElements() {
-		iterateDescendants(child, newPath, callback) // Recursive call
+		iterateDescendants(child, newPath, callback)
 	}
 }
 
-// Parse XML file (downloaded to /temp/) using XML parser ETree
-// Creates a list of jobs ([]map[string]interface{}) and a
-// KeysFrequency map[string]int. Both properties of PM
-func (pm *ParserManager) parseXML() error {
-	// Ensure defaults data structures are created
-	pm.jobs = make([]map[string]interface{}, 0)
-	pm.keysFrequency = make(map[string]int)
-
-	// 1. Read the downloaded file from the temp folder
+func (pm ParserManager) readTempFile() (*os.File, error) {
 	fullTempFilePath := fmt.Sprintf("./temp/%s", pm.file.RemoteFilename)
 	f, err := os.Open(fullTempFilePath)
 	if err != nil {
-		return fmt.Errorf("❌ Error opening XML file: %v", err)
+		return nil, fmt.Errorf("[parseXML] Error opening XML file: %w", err)
+	}
+	return f, nil
+}
+
+// Optimized parseXML function with Mutex
+func (pm *ParserManager) parseXML() error {
+	// Read temp file (downloaded from source)
+	f, err := pm.readTempFile()
+	if err != nil {
+		return err // Descriptive internally
 	}
 	defer f.Close()
-
-	// 2. Build the eTree
+	// Build XML ET
 	tree := etree.NewDocument()
 	if _, err := tree.ReadFrom(f); err != nil {
-		return fmt.Errorf("❌ XML Parse Error: %v. Stopping", err)
+		return fmt.Errorf("[parseXML] XML Parse Error: %w. Stopping", err)
 	}
 	root := tree.Root()
 
-	// 3. For each element in the parsed file
+	pm.jobs = make([]map[string]interface{}, 0, 1000)
+
+	var wg sync.WaitGroup
+	jobChan := make(chan map[string]interface{})
+	var mu sync.Mutex // Mutex for keysFrequency
+
 	for _, jobElement := range root.SelectElements(pm.file.JobNodeKey) {
-		// 4. Create a map[string]interface
-		job := make(map[string]interface{})
+		wg.Add(1)
+		go func(jobElement *etree.Element) {
+			defer wg.Done()
 
-		// 5. Iterate recursivelly over its keys
-		iterateDescendants(jobElement, []string{}, func(element *etree.Element, path []string) {
-			// 5.1 Build the flatten key path
-			var pathStrBuilder strings.Builder
-			for _, p := range path {
-				pathStrBuilder.WriteString(p)
-				pathStrBuilder.WriteString(".")
-			}
-			pathStr := pathStrBuilder.String()
-			pathStr = pathStr[:pathStrBuilder.Len()-1]
+			job := make(map[string]interface{})
 
-			if element.Text() != "" {
-				// 5.2 Once flattened, add the key and value to the job map object
-				job[pathStr] = element.Text()
-				// 5.3 Log the key frequency
-				pm.keysFrequency[pathStr]++
+			iterateDescendants(jobElement, []string{}, func(element *etree.Element, pathStr string) {
+				if element.Text() != "" {
+					job[pathStr] = element.Text()
+
+					mu.Lock() // Lock before writing to keysFrequency
+					pm.keysFrequency[pathStr]++
+					mu.Unlock() // Unlock after writing
+				}
+			})
+
+			if len(job) > 0 {
+				jobChan <- job
 			}
-		})
-		// 6. Append job processed to the list
-		if len(job) > 0 {
-			pm.jobs = append(pm.jobs, job)
-		}
+		}(jobElement)
 	}
-	// Log some audit trail
-	models.NewAuditLog("✔  Successfully parsed new XML file.", pm.file.AuditIteration)
+
+	go func() {
+		wg.Wait()
+		close(jobChan)
+	}()
+
+	for job := range jobChan {
+		pm.jobs = append(pm.jobs, job)
+	}
 	models.NewAuditLog(fmt.Sprintf("%+v", pm.keysFrequency), pm.file.AuditIteration)
 	return nil
 }
@@ -165,7 +175,7 @@ func (pm *ParserManager) parseXML() error {
 func (pm ParserManager) fileIntegrityCheck() error {
 	fullExternlaReferenceKey := fmt.Sprintf("%s.%s", pm.file.JobNodeKey, pm.file.ExternalReferenceKey)
 	if len(pm.jobs) != pm.keysFrequency[fullExternlaReferenceKey] {
-		return fmt.Errorf("❌ There are jobs without a \"%s\" tag", fullExternlaReferenceKey)
+		return fmt.Errorf("[fileIntegrityCheck] There are jobs without a \"%s\" tag", fullExternlaReferenceKey)
 	}
 	return nil
 }
@@ -188,7 +198,7 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 	var localJobcontentJson map[string]interface{}
 	err := json.Unmarshal([]byte(localJob.Content), &localJobcontentJson)
 	if err != nil {
-		return err
+		return fmt.Errorf("[checkJobEdits] Error unmarshalling localJob.Content=%s | error=%s", localJob.Content, err.Error())
 	}
 
 	// Check if new keys have been added.
@@ -204,11 +214,12 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 		for newKey := range addedKeys {
 			if value, ok := remoteJob[newKey].(string); ok {
 				edits = append(edits, models.Edit{
+					Type:            "ADDED_KEY",
 					Ts:              time.Now().Unix(),
 					RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
-					Type:            "ADDED_KEY",
 					Key:             newKey,
 					Value:           value,
+					JobID:           localJob.ID,
 				})
 			}
 		}
@@ -225,10 +236,11 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 	if len(removedKeys) > 0 {
 		for removedKey := range removedKeys {
 			edits = append(edits, models.Edit{
+				Type:            "REMOVED_KEY",
 				Ts:              time.Now().Unix(),
 				RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
-				Type:            "REMOVED_KEY",
 				Key:             removedKey,
+				JobID:           localJob.ID,
 			})
 		}
 	}
@@ -245,12 +257,13 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 				if newValue, okNew := remoteValue.(string); okNew {
 					if oldValue, okOld := localValue.(string); okOld {
 						edits = append(edits, models.Edit{
+							Type:            "EDITED_KEY",
 							Ts:              time.Now().Unix(),
 							RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
-							Type:            "EDITED_KEY",
 							Key:             remoteKey,
 							NewValue:        newValue,
 							OldValue:        oldValue,
+							JobID:           localJob.ID,
 						})
 					}
 				}
@@ -259,144 +272,158 @@ func (pm ParserManager) checkJobEdits(remoteJob map[string]interface{}, localJob
 	}
 
 	// Log some stats
-	pm.stats["added_keys"] += len(addedKeys)
-	pm.stats["removed_keys"] += len(removedKeys)
-	pm.stats["edited_keys"] += editedKeysCounter
-	pm.stats["jobs_processed"]++
+	pm.stats.IncrementKey(ADDED_KEYS, len(addedKeys))
+	pm.stats.IncrementKey(REMOVED_KEYS, len(removedKeys))
+	pm.stats.IncrementKey(EDITED_KEYS, editedKeysCounter)
 
 	// Batch save all edits to db
-	result := initializers.DB.Create(&edits)
+	result := pm.tx.Create(&edits)
 	if result.Error != nil {
-		return result.Error
+		return fmt.Errorf("[checkJobEdits] Error batch saving edits to DB | error=%w", result.Error)
 	}
 	return nil
 }
 
 func (pm ParserManager) processJobs() error {
-	// Initialise stats map
-	pm.stats = map[string]int{}
-
 	// Hold remote jobs parsed to models.Job{} for batch insert into DB
-	processedJobs := []models.Job{}
+	processedJobs := make([]models.Job, 0, len(pm.jobs)) // Pre-allocate
 	// Holds all the remote jobs external reference ids to check for removed jobs from db
-	remoteJobsIDs := map[string]bool{}
-
+	remoteJobsIDs := make(map[string]bool, len(pm.jobs)) // Pre-allocate
+	// Processing errors
+	processingErrors := make([]string, 0) // Pre-allocate
 	// Loop through all remote jobs
-	for i, remoteJob := range pm.jobs {
-		// Skip if job doesn't contain JobExternalReferenceKey
-		// This has already been checked but it's here again for sanity sake
+	if len(pm.jobs) > 0 {
+		// Full External Reference Key
 		fullExternlaReferenceKey := fmt.Sprintf("%s.%s", pm.file.JobNodeKey, pm.file.ExternalReferenceKey)
-		if _, ok := remoteJob[fullExternlaReferenceKey]; !ok {
-			return fmt.Errorf("❌ Skipping job at position %d for missing \"%s\"", i, fullExternlaReferenceKey)
+		//
+		externalReferences := make([]string, 0, len(pm.jobs))
+		// Loop through all remote jobs
+		for _, remoteJob := range pm.jobs {
+			// Remote job external reference value fileIntegrityCheck has already made sure all jobs contain fullExternlaReferenceKey
+			remoteJobExternalReference := remoteJob[fullExternlaReferenceKey].(string)
+			externalReferences = append(externalReferences, remoteJobExternalReference)
+			remoteJobsIDs[remoteJobExternalReference] = true // This job will either be added to DB or already exists
 		}
-		// Remote job external reference value
-		remoteJobExternalReference := remoteJob[fullExternlaReferenceKey].(string)
-		remoteJobsIDs[remoteJobExternalReference] = true // This job will either be added to DB or already exists
 
-		// Check if DB contains this job
-		var localJob models.Job
-		result := initializers.DB.Where("external_reference = ?", remoteJobExternalReference).First(&localJob)
-
-		var found bool = true
-		// Not found is considered a type of error
+		// Batch fetch existing jobs from the database
+		var existingJobs []models.Job
+		result := pm.tx.Where("external_reference IN ?", externalReferences).Find(&existingJobs)
 		if result.Error != nil {
-			// Not found
-			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-				found = false
-			} else { // Some other error
-				// do something
+			return fmt.Errorf("[processJobs] error fetching existing jobs: %w", result.Error)
+		}
+
+		existingJobsMap := make(map[string]models.Job, len(existingJobs)) // For quick lookup
+		for i := range existingJobs {
+			existingJobsMap[existingJobs[i].ExternalReference] = existingJobs[i]
+		}
+
+		for _, remoteJob := range pm.jobs {
+			var localJob models.Job
+			remoteJobExternalReference := remoteJob[fullExternlaReferenceKey].(string)
+			// Remote job hash
+			remoteJobHash := pm.computeHash(remoteJob)
+			// Convert job to json
+			remoteJobJson, err := json.Marshal(remoteJob)
+			if err != nil {
+				processingErrors = append(processingErrors, fmt.Errorf("[processJobs] error converting remoteJob to JSON: %w", err).Error())
+				continue
 			}
-		}
-		// Compute remote job hash
-		remoteJobHash := pm.computeHash(remoteJob)
-		// Convert remoteJob to JSON string
-		remoteJobJson, err := json.Marshal(remoteJob)
-		if err != nil {
-			return err
-		}
-		if found {
-			// If job has been edited (hash is different)
-			if remoteJobHash != localJob.Hash {
-				// Check what edits have been made and log them in DB
-				err := pm.checkJobEdits(remoteJob, localJob)
-				if err != nil {
-					return err
+
+			localJob, found := existingJobsMap[remoteJobExternalReference]
+			if found {
+				// If job has been edited (hash is different)
+				if remoteJobHash != localJob.Hash {
+					// Check what edits have been made and log them in DB
+					err := pm.checkJobEdits(remoteJob, localJob)
+					if err != nil {
+						processingErrors = append(processingErrors, fmt.Errorf("[processJobs] error during checkJobEdits %w", err).Error())
+						continue
+					}
+					// Update job record in DB to the new job model
+					localJob.Content = string(remoteJobJson)
+					// Update job record hash to new hash
+					localJob.Hash = remoteJobHash
+					// Save updated job record
+					result := pm.tx.Save(&localJob)
+					if result.Error != nil {
+						return fmt.Errorf("[processJobs] error saving localJob %w", result.Error)
+					}
+					// Increment stats
+					pm.stats.IncrementKey(JOBS_EDITED, 1)
 				}
-				// Update job record in DB to the new job model
-				localJob.Content = string(remoteJobJson)
-				// Update job record hash to new hash
-				localJob.Hash = remoteJobHash
-				// Save updated job record
-				result := initializers.DB.Save(&localJob)
-				if result.Error != nil {
-					return result.Error
-				}
-				// Increment stats
-				pm.stats["jobs_edited"]++
 			} else {
-				// Job hasn't been edited
+				// Create job object (and edits)
+				newJob := models.Job{
+					ExternalReference: remoteJobExternalReference,
+					Content:           string(remoteJobJson),
+					Hash:              remoteJobHash,
+					FileID:            pm.file.ID,
+					Edits: []models.Edit{{
+						Type:            "ADDED_JOB",
+						Ts:              time.Now().Unix(),
+						RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
+						// JobID:           localJob.ID,
+					}},
+				}
+				// Add new job to list for batch insert into db
+				processedJobs = append(processedJobs, newJob)
+				// Increment stats
+				pm.stats.IncrementKey(JOBS_ADDED, 1)
 			}
-		} else {
-			// Create job object (and edits)
-			newJob := models.Job{
-				ExternalReference: remoteJobExternalReference,
-				Hash:              remoteJobHash,
-				Content:           string(remoteJobJson),
-				Edits: []models.Edit{{
-					Ts:              time.Now().Unix(),
-					RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
-					Type:            "ADDED_JOB",
-				}},
+
+		}
+		// Batch insert all processed jobs into DB
+		if len(processedJobs) > 0 {
+			result := pm.tx.Create(&processedJobs)
+			if result.Error != nil {
+				return fmt.Errorf("[processJobs] error creating processedJobs %w", result.Error)
 			}
-			// Add new job to list for batch insert into db
-			processedJobs = append(processedJobs, newJob)
-			// Increment stats
-			pm.stats["jobs_added"]++
+		}
+		// Return all errors found in one joined string
+		if len(processingErrors) > 0 {
+			return fmt.Errorf("%s", strings.Join(processingErrors, "\n"))
 		}
 	}
-	// Batch insert all processed jobs into DB
-	result := initializers.DB.Create(&processedJobs)
-	if result.Error != nil {
-		return result.Error
-	}
+
 	// Check for removed jobs
 	// Loop through all db jobs that are NOT marked deleted already
 	var localJobs []models.Job
-	result = initializers.DB.Select("external_reference", "id").Where("deleted_at IS NULL").Find(&localJobs)
+	result := pm.tx.Where("deleted", false).Find(&localJobs)
 	if result.Error != nil {
-		return result.Error
+		return fmt.Errorf("[processJobs] error finding []localJobs with deleted = false %w", result.Error)
 	}
-	for i := range localJobs {
-		localJob := &localJobs[i] // Get a pointer to the actual job element
-		// If the localjob id is not in the remoteJobs ids list, then
-		// job has been deleted from source data.
-		if _, ok := remoteJobsIDs[localJob.ExternalReference]; !ok {
-			//	Delete job from db (this won't delete data, only sets the deleted_at)
-			result := initializers.DB.Where("id = ?", localJob.ID).Delete(&models.Job{})
-			if result.Error != nil {
-				return result.Error
+	if len(localJobs) > 0 {
+		for i := range localJobs {
+			localJob := &localJobs[i] // Get a pointer to the actual job element
+			// If the localjob id is not in the remoteJobs ids list, then
+			// job has been deleted from source data.
+			if _, ok := remoteJobsIDs[localJob.ExternalReference]; !ok {
+				// Add edit to the job and save
+				localJob.Edits = append(localJob.Edits, models.Edit{
+					Type:            "REMOVED_JOB",
+					Ts:              time.Now().Unix(),
+					RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
+					JobID:           localJob.ID,
+				})
+				//	Delete job from db (this won't delete data; set Deleted=true)
+				pm.tx.Model(&localJob).Updates(models.Job{Deleted: true})
+				// Increment stats
+				pm.stats.IncrementKey(JOBS_REMOVED, 1)
 			}
-			// Add edit to the job and save
-			localJob.Edits = append(localJob.Edits, models.Edit{
-				Type:            "REMOVED",
-				Ts:              time.Now().Unix(),
-				RemoteFileModTs: pm.file.RemoteModTime.Format("02/01/2006, 15:04:05"),
-			})
-			initializers.DB.Save(&localJob)
-			// Increment stats
-			pm.stats["jobs_removed"]++
 		}
 	}
-	// Convert stat map to json string
-	statJson, err := json.Marshal(pm.stats)
+
+	// Save stats to db (pass the transaction object)
+	err := pm.stats.SaveToDB(pm.tx)
 	if err != nil {
-		return err
+		return err // Error descriptive internally
 	}
-	// Save stats to db
-	stat := models.Stat{JsonStr: string(statJson)}
-	result = initializers.DB.Save(&stat)
+
+	// Increment AuditIteration and save
+	pm.file.AuditIteration++
+	result = pm.tx.Save(&pm.file)
 	if result.Error != nil {
-		return result.Error
+		return fmt.Errorf("[processJobs] error saving pm.file %w", result.Error)
 	}
 	// Log some audit trail
 	models.NewAuditLog(fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)), pm.file.AuditIteration)
@@ -404,37 +431,69 @@ func (pm ParserManager) processJobs() error {
 }
 
 func (pm ParserManager) Run(clients *[]models.Client) {
-	for _, client := range *clients {
-		var err error
-		for _, file := range client.Files {
-			pm := ParserManager{file: &file}
-			// SFTP Step
-			if err = pm.sftpStep(); err != nil {
-				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
-				continue
-			}
-			// Remote file parse step
-			if err = pm.parseXML(); err != nil {
-				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
-				continue
-			}
-			// After parsing the file, and before saving
-			// anything to the db, check file data integrity
-			if err = pm.fileIntegrityCheck(); err != nil {
-				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
-				continue
-			}
-			// Process new jobs
-			if err = pm.processJobs(); err != nil {
-				models.NewAuditLog(err.Error(), pm.file.AuditIteration)
-				continue
-			}
-			// Increment AuditIteration and save
-			file.AuditIteration++
-			result := initializers.DB.Save(&pm.file)
-			if result.Error != nil {
-				models.NewAuditLog(result.Error.Error(), pm.file.AuditIteration)
-				continue
+	statKeys := []string{ADDED_KEYS, EDITED_KEYS, REMOVED_KEYS, JOBS_ADDED, JOBS_REMOVED, JOBS_EDITED}
+
+	if len((*clients)) > 0 {
+		for _, client := range *clients {
+			var err error
+			if len(client.Files) > 0 {
+				for _, file := range client.Files {
+					// Surround all in a single db tx return err will rollback()
+					err = initializers.DB.Transaction(func(tx *gorm.DB) error {
+						// Initialise stats map
+						pm := ParserManager{
+							tx:            tx,
+							file:          &file,
+							jobs:          make([]map[string]interface{}, 0),
+							keysFrequency: make(map[string]int),
+							stats:         models.NewStat(statKeys, file.ID),
+						}
+
+						start := time.Now() // Record the start time
+						// SFTP Step
+						if err = pm.sftpStep(); err != nil {
+							return err
+						}
+
+						end := time.Now()          // Record the end time
+						duration := end.Sub(start) // Calculate the duration
+						fmt.Printf("[sftpStep] duration: %v\n", duration)
+
+						start = time.Now() // Record the start time
+
+						// Remote file parse step
+						if err = pm.parseXML(); err != nil {
+							return err
+						}
+						end = time.Now()          // Record the end time
+						duration = end.Sub(start) // Calculate the duration
+						fmt.Printf("[parseXML] duration: %v\n", duration)
+
+						start = time.Now() // Record the start time
+
+						// After parsing the file check file data integrity
+						if err = pm.fileIntegrityCheck(); err != nil {
+							return err
+						}
+						end = time.Now()          // Record the end time
+						duration = end.Sub(start) // Calculate the duration
+						fmt.Printf("[fileIntegrityCheck] duration: %v\n", duration)
+
+						start = time.Now() // Record the start time
+						// Process new jobs
+						if err = pm.processJobs(); err != nil {
+							return err
+						}
+						end = time.Now()          // Record the end time
+						duration = end.Sub(start) // Calculate the duration
+						fmt.Printf("[processJobs] duration: %v\n", duration)
+
+						return nil // Commit tx
+					})
+					if err != nil {
+						models.NewAuditLog(err.Error(), file.AuditIteration)
+					}
+				}
 			}
 		}
 	}
