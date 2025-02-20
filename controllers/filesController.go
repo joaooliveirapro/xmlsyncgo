@@ -17,13 +17,13 @@ func FilesGetAll(c *gin.Context) {
 		return
 	}
 	// Get file from DB
-	var file models.File
+	var files []models.File
 	// For security, omit password value
-	result := initializers.DB.Omit("password").First(&file, client_id)
+	result := initializers.DB.Omit("password").First(&files, client_id)
 	if result.Error != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	// Send data to client
-	c.JSON(http.StatusOK, file)
+	c.JSON(http.StatusOK, files)
 }
