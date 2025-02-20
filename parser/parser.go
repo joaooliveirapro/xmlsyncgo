@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,19 +103,10 @@ func iterateDescendants(element *etree.Element, currentPath []string, callback f
 	}
 }
 
-func (pm ParserManager) readTempFile() (*os.File, error) {
-	fullTempFilePath := fmt.Sprintf("./temp/%s", pm.file.RemoteFilename)
-	f, err := os.Open(fullTempFilePath)
-	if err != nil {
-		return nil, fmt.Errorf("[parseXML] Error opening XML file: %w", err)
-	}
-	return f, nil
-}
-
 // Optimized parseXML function with Mutex
 func (pm *ParserManager) parseXML() error {
 	// Read temp file (downloaded from source)
-	f, err := pm.readTempFile()
+	f, err := ReadTempFile(pm.file.RemoteFilename)
 	if err != nil {
 		return err // Descriptive internally
 	}
@@ -128,64 +117,49 @@ func (pm *ParserManager) parseXML() error {
 		return fmt.Errorf("[parseXML] XML Parse Error: %w. Stopping", err)
 	}
 	root := tree.Root()
-
-	pm.jobs = make([]map[string]interface{}, 0, 1000)
-
-	var wg sync.WaitGroup
+	var wg sync.WaitGroup // Wg group
+	var mu sync.Mutex     // Mutex for keysFrequency
 	jobChan := make(chan map[string]interface{})
-	var mu sync.Mutex // Mutex for keysFrequency
-
+	// loop all elements in XML file and build a map[string]string of
+	// a flat representation of the XML file keys and values
 	for _, jobElement := range root.SelectElements(pm.file.JobNodeKey) {
 		wg.Add(1)
 		go func(jobElement *etree.Element) {
 			defer wg.Done()
-
 			job := make(map[string]interface{})
-
 			iterateDescendants(jobElement, []string{}, func(element *etree.Element, pathStr string) {
 				if element.Text() != "" {
 					job[pathStr] = element.Text()
-
 					mu.Lock() // Lock before writing to keysFrequency
 					pm.keysFrequency[pathStr]++
 					mu.Unlock() // Unlock after writing
 				}
 			})
-
 			if len(job) > 0 {
 				jobChan <- job
 			}
 		}(jobElement)
 	}
-
+	// Wait for all go routines to finish and close the channel
 	go func() {
 		wg.Wait()
 		close(jobChan)
 	}()
-
+	// Each job added to the channel, append to pm.jobs
 	for job := range jobChan {
 		pm.jobs = append(pm.jobs, job)
 	}
-	models.NewAuditLog(fmt.Sprintf("%+v", pm.keysFrequency), pm.file.AuditIteration)
-	return nil
-}
-
-// Check if all the jobs parsed (before saving to DB) contain the main
-// ExternalReferenceKey. If at least one fails, return error.
-func (pm ParserManager) fileIntegrityCheck() error {
+	// Log keys frequency map to db
+	pm.tx.Create(&models.AuditLog{
+		Text:           fmt.Sprintf("%+v", pm.keysFrequency),
+		AuditIteration: pm.file.AuditIteration,
+	})
+	// Data integrity check - it's important all jobs have the ExternalReferenceKey
 	fullExternlaReferenceKey := fmt.Sprintf("%s.%s", pm.file.JobNodeKey, pm.file.ExternalReferenceKey)
 	if len(pm.jobs) != pm.keysFrequency[fullExternlaReferenceKey] {
 		return fmt.Errorf("[fileIntegrityCheck] There are jobs without a \"%s\" tag", fullExternlaReferenceKey)
 	}
 	return nil
-}
-
-// Computes a SHA256 hash of a map[string]any data object.
-func (pm ParserManager) computeHash(data map[string]interface{}) string {
-	jsonString, _ := json.Marshal(data)
-	hasher := sha256.New()
-	hasher.Write(jsonString)
-	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 // Check job edits compares remote job keys with the job data stored in db
@@ -321,7 +295,7 @@ func (pm ParserManager) processJobs() error {
 			var localJob models.Job
 			remoteJobExternalReference := remoteJob[fullExternlaReferenceKey].(string)
 			// Remote job hash
-			remoteJobHash := pm.computeHash(remoteJob)
+			remoteJobHash := ComputeSHA256Hash(remoteJob)
 			// Convert job to json
 			remoteJobJson, err := json.Marshal(remoteJob)
 			if err != nil {
@@ -418,80 +392,55 @@ func (pm ParserManager) processJobs() error {
 	if err != nil {
 		return err // Error descriptive internally
 	}
-
+	// Log some audit trail
+	pm.tx.Create(&models.AuditLog{
+		Text:           fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)),
+		AuditIteration: pm.file.AuditIteration,
+	})
 	// Increment AuditIteration and save
 	pm.file.AuditIteration++
 	result = pm.tx.Save(&pm.file)
 	if result.Error != nil {
 		return fmt.Errorf("[processJobs] error saving pm.file %w", result.Error)
 	}
-	// Log some audit trail
-	models.NewAuditLog(fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)), pm.file.AuditIteration)
 	return nil
 }
 
-func (pm ParserManager) Run(clients *[]models.Client) {
+func Main() {
 	statKeys := []string{ADDED_KEYS, EDITED_KEYS, REMOVED_KEYS, JOBS_ADDED, JOBS_REMOVED, JOBS_EDITED}
-
-	if len((*clients)) > 0 {
-		for _, client := range *clients {
+	var clients []models.Client                     // Get all clients from DB
+	initializers.DB.Preload("Files").Find(&clients) // Preload "Files" for each client
+	if len(clients) > 0 {
+		for _, client := range clients {
 			var err error
 			if len(client.Files) > 0 {
 				for _, file := range client.Files {
 					// Surround all in a single db tx return err will rollback()
 					err = initializers.DB.Transaction(func(tx *gorm.DB) error {
-						// Initialise stats map
+						// Initialise parse manager for each file
 						pm := ParserManager{
 							tx:            tx,
 							file:          &file,
-							jobs:          make([]map[string]interface{}, 0),
+							jobs:          make([]map[string]interface{}, 0, 1000),
 							keysFrequency: make(map[string]int),
 							stats:         models.NewStat(statKeys, file.ID),
 						}
-
-						start := time.Now() // Record the start time
 						// SFTP Step
 						if err = pm.sftpStep(); err != nil {
 							return err
 						}
-
-						end := time.Now()          // Record the end time
-						duration := end.Sub(start) // Calculate the duration
-						fmt.Printf("[sftpStep] duration: %v\n", duration)
-
-						start = time.Now() // Record the start time
-
 						// Remote file parse step
 						if err = pm.parseXML(); err != nil {
 							return err
 						}
-						end = time.Now()          // Record the end time
-						duration = end.Sub(start) // Calculate the duration
-						fmt.Printf("[parseXML] duration: %v\n", duration)
-
-						start = time.Now() // Record the start time
-
-						// After parsing the file check file data integrity
-						if err = pm.fileIntegrityCheck(); err != nil {
-							return err
-						}
-						end = time.Now()          // Record the end time
-						duration = end.Sub(start) // Calculate the duration
-						fmt.Printf("[fileIntegrityCheck] duration: %v\n", duration)
-
-						start = time.Now() // Record the start time
 						// Process new jobs
 						if err = pm.processJobs(); err != nil {
 							return err
 						}
-						end = time.Now()          // Record the end time
-						duration = end.Sub(start) // Calculate the duration
-						fmt.Printf("[processJobs] duration: %v\n", duration)
-
 						return nil // Commit tx
 					})
 					if err != nil {
-						models.NewAuditLog(err.Error(), file.AuditIteration)
+						initializers.DB.Create(&models.AuditLog{Text: err.Error(), AuditIteration: file.AuditIteration})
 					}
 				}
 			}
