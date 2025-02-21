@@ -16,7 +16,7 @@ func ClientGetAll(c *gin.Context) {
 		return
 	}
 	// Get all clients paginated and more info
-	response, err := models.Paginate[models.Edit](50, pageNumber, "", "id DESC")
+	response, err := models.Paginate[models.Client](50, pageNumber, "", "id DESC")
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
