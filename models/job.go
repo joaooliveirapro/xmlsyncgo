@@ -1,6 +1,8 @@
 package models
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+)
 
 type Job struct {
 	gorm.Model
@@ -10,5 +12,4 @@ type Job struct {
 	Hash              string
 	FileID            uint   `gorm:"not null;index"`   // Job N:1 File
 	Edits             []Edit `gorm:"foreignKey:JobID"` // Job 1:N Edit
-
 }
