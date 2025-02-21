@@ -40,6 +40,7 @@ require (
 )
 
 require (
+	github.com/gin-contrib/cors v1.7.3
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/pkg/sftp v1.13.7
 	golang.org/x/sys v0.30.0 // indirect
