@@ -152,6 +152,7 @@ func (pm *ParserManager) parseXML() error {
 	// Log keys frequency map to db
 	pm.tx.Create(&models.AuditLog{
 		Text:           fmt.Sprintf("%+v", pm.keysFrequency),
+		FileID:         pm.file.ID,
 		AuditIteration: pm.file.AuditIteration,
 	})
 	// Data integrity check - it's important all jobs have the ExternalReferenceKey
@@ -395,6 +396,7 @@ func (pm ParserManager) processJobs() error {
 	// Log some audit trail
 	pm.tx.Create(&models.AuditLog{
 		Text:           fmt.Sprintf("✔  Successfully processed %d jobs.", len(pm.jobs)),
+		FileID:         pm.file.ID,
 		AuditIteration: pm.file.AuditIteration,
 	})
 	// Increment AuditIteration and save
@@ -440,7 +442,11 @@ func Main() {
 						return nil // Commit tx
 					})
 					if err != nil {
-						initializers.DB.Create(&models.AuditLog{Text: err.Error(), AuditIteration: file.AuditIteration})
+						initializers.DB.Create(&models.AuditLog{
+							Text:           err.Error(),
+							FileID:         file.ID,
+							AuditIteration: file.AuditIteration,
+						})
 					}
 				}
 			}
