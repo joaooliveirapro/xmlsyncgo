@@ -27,10 +27,6 @@ func JobsGetAll(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	if err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
 	// Send data to client
 	c.JSON(http.StatusOK, &response)
 }
