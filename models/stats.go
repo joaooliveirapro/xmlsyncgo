@@ -27,12 +27,7 @@ func (s *Stat) AddEntry(key string, val int) {
 }
 
 func (s *Stat) IncrementKey(key string, by int) {
-	if _, ok := s.content[key]; ok {
-		s.content[key] += by
-	} else {
-		// Default key to 0 and increment it
-		s.content[key] = by
-	}
+	s.content[key] += by
 }
 
 func (s *Stat) SaveToDB(tx *gorm.DB) error {
