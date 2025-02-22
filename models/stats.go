@@ -8,10 +8,10 @@ import (
 )
 
 type Stat struct {
-	gorm.Model
-	JsonStr string `gorm:"type:json"`
-	FileID  uint   `gorm:"not null;index"` // Stat N:1 File
-	content map[string]int
+	CommonFields
+	JsonStr string         `gorm:"type:json" json:"jsonStr"`
+	FileID  uint           `gorm:"not null;index" json:"fileId"` // Stat N:1 File
+	content map[string]int // Not exported (lowercase)
 }
 
 func NewStat(keys []string, fileID uint) *Stat {

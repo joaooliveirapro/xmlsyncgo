@@ -1,15 +1,13 @@
 package models
 
-import "gorm.io/gorm"
-
 type Edit struct {
-	gorm.Model
-	Type            string
-	Ts              int64
-	RemoteFileModTs string
-	Key             string
-	Value           string // For added keys
-	NewValue        string // For existing keys
-	OldValue        string // For existing keys
-	JobID           uint   `gorm:"not null;index"` // Edit N:1 Job
+	CommonFields
+	Type            string `json:"type"`
+	Ts              int64  `json:"ts"`
+	RemoteFileModTs string `json:"remoteFileModTs"`
+	Key             string `json:"key"`
+	Value           string `json:"value"`                       // For added keys
+	NewValue        string `json:"newValue"`                    // For existing keys
+	OldValue        string `json:"oldValue"`                    // For existing keys
+	JobID           uint   `gorm:"not null;index" json:"jobId"` // Edit N:1 Job
 }

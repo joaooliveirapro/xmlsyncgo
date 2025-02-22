@@ -1,12 +1,8 @@
 package models
 
-import (
-	"gorm.io/gorm"
-)
-
 type AuditLog struct {
-	gorm.Model
-	Text           string
-	FileID         uint `gorm:"not null;index"` // AuditLog N:1 File
-	AuditIteration uint
+	CommonFields
+	Text           string `json:"text"`
+	FileID         uint   `gorm:"not null;index" json:"fileId"` // AuditLog N:1 File
+	AuditIteration uint   `json:"auditIteration"`
 }

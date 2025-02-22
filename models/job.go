@@ -1,15 +1,11 @@
 package models
 
-import (
-	"gorm.io/gorm"
-)
-
 type Job struct {
-	gorm.Model
-	ExternalReference string
-	Deleted           bool
-	Content           string `gorm:"type:json"`
-	Hash              string
-	FileID            uint   `gorm:"not null;index"`   // Job N:1 File
-	Edits             []Edit `gorm:"foreignKey:JobID"` // Job 1:N Edit
+	CommonFields
+	ExternalReference string `json:"externalReference"`
+	Deleted           bool   `json:"-"`
+	Content           string `gorm:"type:json" json:"content"`
+	Hash              string `json:"hash"`
+	FileID            uint   `gorm:"not null;index" json:"fileId"` // Job N:1 File
+	Edits             []Edit `gorm:"foreignKey:JobID" json:"-"`    // Job 1:N Edit
 }

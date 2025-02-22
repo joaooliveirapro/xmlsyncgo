@@ -1,12 +1,24 @@
 package models
 
-import "github.com/joaooliveirapro/xmlsyncgo/initializers"
+import (
+	"time"
+
+	"github.com/joaooliveirapro/xmlsyncgo/initializers"
+	"gorm.io/gorm"
+)
+
+type CommonFields struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
 
 type PaginatedResponse[T any] struct {
 	Page       int   `json:"page"`
 	TotalPages int64 `json:"totalPages"`
-	TotalItems int64 `json:"totalItems"`
-	Items      []T   `json:"items"`
+	Total      int64 `json:"total"`
+	Data       []T   `json:"data"`
 }
 
 func Paginate[T any](pageSize int, pageNumber int, whereQ string, orderQ string, whereA ...interface{}) (*PaginatedResponse[T], error) {
@@ -28,8 +40,8 @@ func Paginate[T any](pageSize int, pageNumber int, whereQ string, orderQ string,
 	response := PaginatedResponse[T]{
 		Page:       pageNumber,
 		TotalPages: totalPages,
-		TotalItems: totalItems,
-		Items:      list,
+		Total:      totalItems,
+		Data:       list,
 	}
 
 	return &response, nil
