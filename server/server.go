@@ -1,38 +1,71 @@
 package server
 
 import (
-	"time"
+	"log"
+	"net/http"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joaooliveirapro/xmlsyncgo/controllers"
 )
 
-type WebServer struct {
-	DistDir string
+type Transport interface {
+	ServerHTTP()
 }
 
-func (ws *WebServer) Start(port string) {
-	// Server index.html
-	r := gin.Default()
+type HTTPTransport struct {
+	Engine *gin.Engine
+}
 
-	// Configure CORS middleware
-	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"http://localhost:8080"}                                     // Replace with your frontend's domain
-	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}  // Adjust as needed
-	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"} // Adjust as needed
-	config.AllowCredentials = true                                                              // If you need to send cookies
-	config.MaxAge = 12 * time.Hour                                                              // Optional: Set max age for preflight requests
+func NewTransport() *HTTPTransport {
+	return &HTTPTransport{
+		Engine: gin.Default(),
+	}
+}
 
-	r.Use(cors.New(config))
+func (h *HTTPTransport) ServerHTTP() {
+	// Grab root path
+	rootPath := h.Engine.Group("/")
 
+	// Use middleware
+	rootPath.Use(h.CORSMiddleware())
+
+	// Set API Routes
+	h.APIRoutes(rootPath)
+
+	// Start server in a goroutine
+	go func() {
+		// PORT is set in .env
+		if err := h.Engine.Run(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+}
+
+func (h *HTTPTransport) CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "range")
+		c.Writer.Header().Set("Access-Control-Max-Age", "86400")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
+
+// Register the API routes
+func (h *HTTPTransport) APIRoutes(r *gin.RouterGroup, middleware ...gin.HandlerFunc) {
 	// GET
-	r.GET("/clients", controllers.ClientGetAll)
-	r.GET("/clients/:client_id/files", controllers.FilesGetAll)
-	r.GET("/clients/:client_id/files/:file_id/audits", controllers.AuditsGetAll)
-	r.GET("/clients/:client_id/files/:file_id/stats", controllers.StatsGetAll)
-	r.GET("/clients/:client_id/files/:file_id/jobs", controllers.JobsGetAll)
-	r.GET("/clients/:client_id/files/:file_id/jobs/:job_id/edits", controllers.EditsGetAll)
-
-	r.Run()
+	v1 := r.Group("/v1")
+	v1.GET("/clients", controllers.ClientGetAll)
+	v1.GET("/clients/:client_id/files", controllers.FilesGetAll)
+	v1.GET("/clients/:client_id/files/:file_id/audits", controllers.AuditsGetAll)
+	v1.GET("/clients/:client_id/files/:file_id/stats", controllers.StatsGetAll)
+	v1.GET("/clients/:client_id/files/:file_id/jobs", controllers.JobsGetAll)
+	v1.GET("/clients/:client_id/files/:file_id/jobs/:job_id/edits", controllers.EditsGetAll)
 }
