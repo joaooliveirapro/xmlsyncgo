@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -21,6 +22,8 @@ func ClientGetAll(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
+	// Add custom headers
+	c.Writer.Header().Set("X-Total-Count", fmt.Sprintf("%d", response.Total))
 	// Send data to client
 	c.JSON(http.StatusOK, &response)
 }
