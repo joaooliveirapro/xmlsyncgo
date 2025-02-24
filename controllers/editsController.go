@@ -22,7 +22,14 @@ func EditsGetAll(c *gin.Context) {
 		return
 	}
 	// Get all jobs paginated and more info
-	response, err := models.Paginate[models.Edit](50, pageNumber, "job_id = ?", "id DESC", job_id)
+	args := models.PaginateArgs{
+		PageSize:   50,
+		PageNumber: pageNumber,
+		WhereQ:     "job_id = ?",
+		OrderQ:     "id DESC",
+		WhereA:     []interface{}{job_id},
+	}
+	response, err := models.Paginate[models.Edit](args)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return

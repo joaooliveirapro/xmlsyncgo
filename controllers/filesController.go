@@ -22,7 +22,14 @@ func FilesGetAll(c *gin.Context) {
 		return
 	}
 	// Get files from DB
-	response, err := models.Paginate[models.File](50, pageNumber, "client_id = ?", "id DESC", client_id)
+	args := models.PaginateArgs{
+		PageSize:   50,
+		PageNumber: pageNumber,
+		WhereQ:     "client_id = ?",
+		OrderQ:     "id DESC",
+		WhereA:     []interface{}{client_id},
+	}
+	response, err := models.Paginate[models.File](args)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return

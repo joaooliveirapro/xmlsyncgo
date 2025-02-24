@@ -22,7 +22,14 @@ func AuditsGetAll(c *gin.Context) {
 		return
 	}
 	// Get all audits paginated and more info
-	response, err := models.Paginate[models.AuditLog](50, pageNumber, "file_id = ?", "id DESC", file_id)
+	args := models.PaginateArgs{
+		PageSize:   50,
+		PageNumber: pageNumber,
+		WhereQ:     "file_id = ?",
+		OrderQ:     "id DESC",
+		WhereA:     []interface{}{file_id},
+	}
+	response, err := models.Paginate[models.AuditLog](args)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return

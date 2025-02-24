@@ -23,7 +23,14 @@ func StatsGetAll(c *gin.Context) {
 	}
 	// Get stats from DB
 	// Get all jobs paginated and more info
-	response, err := models.Paginate[models.Stat](50, pageNumber, "file_id = ?", "id DESC", file_id)
+	args := models.PaginateArgs{
+		PageSize:   50,
+		PageNumber: pageNumber,
+		WhereQ:     "file_id = ?",
+		OrderQ:     "id DESC",
+		WhereA:     []interface{}{file_id},
+	}
+	response, err := models.Paginate[models.Stat](args)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
