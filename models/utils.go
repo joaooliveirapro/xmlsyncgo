@@ -44,9 +44,9 @@ func Paginate[T any](args PaginateArgs) (*PaginatedResponse[T], error) {
 	}
 	offset := (args.PageNumber - 1) * args.PageSize
 	if args.Preload {
-		result = initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Order(args.OrderQ).Offset(offset).Limit(args.PageSize).Find(&list)
-	} else {
 		result = initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Order(args.OrderQ).Offset(offset).Limit(args.PageSize).Preload(args.PreloadQ).Find(&list)
+	} else {
+		result = initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Order(args.OrderQ).Offset(offset).Limit(args.PageSize).Find(&list)
 	}
 	if result.Error != nil {
 		return nil, result.Error
