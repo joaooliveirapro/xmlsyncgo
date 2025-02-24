@@ -27,6 +27,8 @@ func JobsGetAll(c *gin.Context) {
 		PageNumber: pageNumber,
 		WhereQ:     "file_id = ?",
 		OrderQ:     "id DESC",
+		Preload:    true,
+		PreloadQ:   "Edits",
 		WhereA:     []interface{}{file_id},
 	}
 	response, err := models.Paginate[models.Job](args)
