@@ -21,28 +21,41 @@ type PaginatedResponse[T any] struct {
 	Data       []T   `json:"data"`
 }
 
-func Paginate[T any](pageSize int, pageNumber int, whereQ string, orderQ string, whereA ...interface{}) (*PaginatedResponse[T], error) {
+type PaginateArgs struct {
+	PageSize   int
+	PageNumber int
+	WhereQ     string
+	OrderQ     string
+	Preload    bool
+	PreloadQ   string
+	WhereA     []interface{}
+}
+
+func Paginate[T any](args PaginateArgs) (*PaginatedResponse[T], error) {
 	var list []T
 	var totalItems int64
-	result := initializers.DB.Model(new(T)).Where(whereQ, whereA...).Count(&totalItems)
+	result := initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Count(&totalItems)
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	totalPages := (totalItems + int64(pageSize) - 1) / int64(pageSize)
-	if pageNumber > int(totalPages) {
-		pageNumber = int(totalPages)
+	totalPages := (totalItems + int64(args.PageSize) - 1) / int64(args.PageSize)
+	if args.PageNumber > int(totalPages) {
+		args.PageNumber = int(totalPages)
 	}
-	offset := (pageNumber - 1) * pageSize
-	result = initializers.DB.Model(new(T)).Where(whereQ, whereA...).Order(orderQ).Offset(offset).Limit(pageSize).Find(&list)
+	offset := (args.PageNumber - 1) * args.PageSize
+	if args.Preload {
+		result = initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Order(args.OrderQ).Offset(offset).Limit(args.PageSize).Find(&list)
+	} else {
+		result = initializers.DB.Model(new(T)).Where(args.WhereQ, args.WhereA...).Order(args.OrderQ).Offset(offset).Limit(args.PageSize).Preload(args.PreloadQ).Find(&list)
+	}
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	response := PaginatedResponse[T]{
-		Page:       pageNumber,
+		Page:       args.PageNumber,
 		TotalPages: totalPages,
 		Total:      totalItems,
 		Data:       list,
 	}
-
 	return &response, nil
 }
