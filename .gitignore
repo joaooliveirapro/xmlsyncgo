@@ -1,7 +1,8 @@
 data/
 *.xml
-src/web/fe/node_modules
+web/node_modules
 .env
 temp/
+tmp/
 *.sqlite3
 *.exe

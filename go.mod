@@ -43,6 +43,7 @@ require (
 	github.com/gin-contrib/cors v1.7.3
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/pkg/sftp v1.13.7
+	github.com/sirupsen/logrus v1.9.3
 	golang.org/x/sys v0.30.0 // indirect
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.25.12

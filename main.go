@@ -1,9 +1,11 @@
 package main
 
 import (
-	"github.com/joaooliveirapro/xmlsyncgo/initializers"
-	"github.com/joaooliveirapro/xmlsyncgo/models"
-	"github.com/joaooliveirapro/xmlsyncgo/parser"
+	"sync"
+
+	"github.com/joaooliveirapro/xmlsyncgo/src/initializers"
+	"github.com/joaooliveirapro/xmlsyncgo/src/parser"
+	"github.com/joaooliveirapro/xmlsyncgo/src/server"
 )
 
 func init() {
@@ -12,25 +14,18 @@ func init() {
 }
 
 func main() {
-	// Get all clients from DB
-	var clients []models.Client
-	initializers.DB.Preload("Files").Find(&clients)
+	// Run parser on a different go rountine
+	// to avoid blocking the web server
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done() // Signal go routine is done after main is finished
+		parser.Main()   // Parser main entry point
+	}()
+	wg.Wait() // Wait for go routine to finish
 
-	// Create parser manager
-	pm := parser.ParserManager{}
-	pm.Run(&clients)
-
-	// Web Server
-	// r := gin.Default()
-
-	// // Clients
-	// r.GET("/clients", controllers.ClientGetAll)
-	// r.POST("/clients", controllers.ClientCreate)
-
-	// // Files
-	// r.GET("/clients/:client_id/files", controllers.FileGet)
-	// r.POST("/clients/:client_id/files", controllers.FileCreate)
-
-	// // Serve on env.PORT
-	// r.Run()
+	// Run webserver
+	webserver := server.NewTransport()
+	webserver.ServerHTTP()
+	select {}
 }
