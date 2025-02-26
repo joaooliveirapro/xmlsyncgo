@@ -1,5 +1,7 @@
 package models
 
 type Client struct {
-	Id int
+	CommonFields
+	Name  string `json:"name"`
+	Files []File `gorm:"foreignKey:ClientID" json:"-"`
 }
