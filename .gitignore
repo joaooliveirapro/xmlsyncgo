@@ -1,6 +1,6 @@
 data/
 *.xml
-web/node_modules
+src/web/node_modules
 .env
 temp/
 tmp/

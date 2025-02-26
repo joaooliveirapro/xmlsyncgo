@@ -5,7 +5,8 @@ export default createStore({
     client: {},
     clients: [],
     files: [],
-    jobs: []
+    jobs: [],
+    audits: []
   },
   getters: {
   },
@@ -21,6 +22,9 @@ export default createStore({
     },
     jobs(state, newJobs) {
       state.jobs = newJobs
+    },
+    audits(state, newAudits) {
+      state.audits = newAudits
     }
   },
   actions: {
@@ -35,6 +39,9 @@ export default createStore({
     },
     updateJobs({commit}, jobs) {
       commit('jobs', jobs)
+    },
+    updateAudits({commit}, jobs) {
+      commit('audits', jobs)
     }
   },
   modules: {

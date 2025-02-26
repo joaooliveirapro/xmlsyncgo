@@ -3,11 +3,31 @@
     <template #header>
       <h1>Clients</h1>
     </template>
-    <template #table-header>
-      <th>ID</th>
-      <th>Name</th>
-      <th>Created At</th>
-      <th>Updated At</th>
+    <template #table-header="slotProps">
+      <th @click="slotProps.sort('id')">
+        ID
+        <span v-if="slotProps.sortColumn === 'id'">
+          {{ slotProps.sortDirection === 'asc' ? '▲' : '▼' }}
+        </span>
+      </th>
+      <th @click="slotProps.sort('name')">
+        Name
+        <span v-if="slotProps.sortColumn === 'name'">
+          {{ slotProps.sortDirection === 'asc' ? '▲' : '▼' }}
+        </span>
+      </th>
+      <th @click="slotProps.sort('createdAt')">
+        Created At
+        <span v-if="slotProps.sortColumn === 'createdAt'">
+          {{ slotProps.sortDirection === 'asc' ? '▲' : '▼' }}
+        </span>
+      </th>
+      <th @click="slotProps.sort('updatedAt')">
+        Updated At
+        <span v-if="slotProps.sortColumn === 'updatedAt'">
+          {{ slotProps.sortDirection === 'asc' ? '▲' : '▼' }}
+        </span>
+      </th>
     </template>
     <template #table-rows="slotProps">
       <tr v-for="c in slotProps.items" :key="c.id">

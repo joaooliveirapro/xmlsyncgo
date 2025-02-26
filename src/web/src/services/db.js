@@ -22,6 +22,7 @@ class DatabaseService {
   async getJobs(clientId, fileId, {pageNumber}) {
     const jobs = await fetch(`${this.baseurl}/clients/${clientId}/files/${fileId}/jobs?page=${pageNumber ?? 1}`)
     const data = await jobs.json()
+    store.dispatch('updateJobs', data.data)
     return data
   }
 
@@ -31,9 +32,10 @@ class DatabaseService {
     return data
   }
 
-  async getAudits(clientId, fileId) {
-    const audits = await fetch(`${this.baseurl}/clients/${clientId}/files/${fileId}/audits`)
+  async getAudits(clientId, fileId, {pageNumber}) {
+    const audits = await fetch(`${this.baseurl}/clients/${clientId}/files/${fileId}/audits?page=${pageNumber ?? 1}`)
     const data = await audits.json()
+    store.dispatch('updateAudits', data.data)
     return data
   }
 
